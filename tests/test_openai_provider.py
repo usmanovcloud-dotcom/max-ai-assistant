@@ -103,6 +103,7 @@ class OpenAIProviderTests(unittest.IsolatedAsyncioTestCase):
             return 200, success_payload("ok"), {}
 
         provider = OpenAICompatibleProvider(self.config(), self.storage, http_post=post)
+        provider._download_attachment = AsyncMock(return_value=b"pdf bytes")
         attachments = (
             IncomingAttachment("file", "report.pdf", "https://max.example/report"),
             IncomingAttachment("image", "photo.jpg", "https://max.example/photo"),
@@ -121,9 +122,11 @@ class OpenAIProviderTests(unittest.IsolatedAsyncioTestCase):
             {
                 "type": "input_file",
                 "filename": "report.pdf",
-                "file_url": "https://max.example/report",
+                "file_data": "data:application/pdf;base64,cGRmIGJ5dGVz",
             },
         )
+        self.assertNotIn("max.example/report", str(captured["body"]))
+        provider._download_attachment.assert_awaited_once_with(attachments[0])
         self.assertEqual(
             content[2],
             {"type": "input_image", "image_url": "https://max.example/photo"},
@@ -151,6 +154,43 @@ class OpenAIProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("текст голосового сообщения", prepared)
         self.assertNotIn("signature=secret", str(captured["body"]))
         provider._transcribe_audio.assert_awaited_once_with(audio)
+
+    async def test_file_download_enforces_actual_size_limit(self) -> None:
+        provider = OpenAICompatibleProvider(
+            self.config(max_attachment_bytes=4), self.storage, http_post=AsyncMock()
+        )
+        attachment = IncomingAttachment(
+            "file", "report.pdf", "https://max.example/report", size=1
+        )
+
+        class Content:
+            async def iter_chunked(self, size):
+                yield b"123"
+                yield b"45"
+
+        class Response:
+            status = 200
+            content = Content()
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+        class Session:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+            def get(self, url):
+                return Response()
+
+        with patch("aiohttp.ClientSession", return_value=Session()):
+            with self.assertRaises(OpenAIInputTooLong):
+                await provider._download_attachment(attachment)
 
     async def test_payment_required_is_reported_as_quota_error(self) -> None:
         post = AsyncMock(return_value=(402, {"error": {"message": "quota"}}, {}))

@@ -8,7 +8,7 @@ from aiohttp.test_utils import AioHTTPTestCase
 
 from app.config import Settings
 from app.storage import Storage
-from app.web import PROVIDER_INFO_KEY, SETTINGS_KEY, create_web_app
+from app.web import PROVIDER_INFO_KEY, SETTINGS_KEY, SUPERVISOR_KEY, create_web_app
 
 
 class WebDashboardTests(AioHTTPTestCase):
@@ -46,6 +46,28 @@ class WebDashboardTests(AioHTTPTestCase):
         payload = await response.json()
         self.assertFalse(payload["running"])
         self.assertTrue(payload["security"]["loopback_only"])
+
+    async def test_claim_copy_supports_insecure_lan_context(self) -> None:
+        response = await self.client.get("/assets/app.js")
+        self.assertEqual(response.status, 200)
+        script = await response.text()
+        self.assertIn("navigator.clipboard?.writeText", script)
+        self.assertIn("document.execCommand('copy')", script)
+        self.assertIn("$('#copy-claim').onclick=copyClaimCommand", script)
+
+    async def test_max_auth_timeline_logo_and_qr_refresh(self) -> None:
+        response = await self.client.get("/")
+        page = await response.text()
+        self.assertIn('id="max-auth-steps"', page)
+        self.assertIn('id="refresh-qr"', page)
+        self.assertIn("/assets/max-ai-logo.png", page)
+
+        self.app[SUPERVISOR_KEY].request_new_qr = AsyncMock()
+        response = await self.client.post(
+            "/api/max/qr/refresh", json={}, headers=self.mutation_headers()
+        )
+        self.assertEqual(response.status, 200)
+        self.app[SUPERVISOR_KEY].request_new_qr.assert_awaited_once()
 
     async def test_mutations_require_dashboard_marker(self) -> None:
         response = await self.client.post("/api/conversations", json={})

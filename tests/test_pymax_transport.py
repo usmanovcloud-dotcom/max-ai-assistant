@@ -12,6 +12,7 @@ from app.pymax_transport import (
     PyMaxTransport,
     SafeQrStatus,
 )
+from pymax.types.domain.attachments import AudioAttachment, FileAttachment, PhotoAttachment
 
 
 class FakeClient:
@@ -34,6 +35,11 @@ class FakeClient:
 
     async def get_chat(self, chat_id: int):
         return SimpleNamespace(id=chat_id, type="CHAT")
+
+    async def get_file_by_id(self, chat_id: int, message_id: int, file_id: int):
+        return SimpleNamespace(
+            url=f"https://max.example/files/{file_id}?signature=secret", unsafe=False
+        )
 
     async def send_message(self, chat_id: int, text: str) -> None:
         self.sent.append((chat_id, text))
@@ -94,6 +100,68 @@ class PyMaxTransportTests(unittest.IsolatedAsyncioTestCase):
     async def test_send_converts_persisted_chat_id_to_integer(self) -> None:
         await self.transport.send_text("10", "hello")
         self.assertEqual(self.client.sent, [(10, "hello")])
+
+    async def test_maps_supported_file_and_photo_attachments(self) -> None:
+        file = FileAttachment.model_validate(
+            {"fileId": 7, "name": "report.pdf", "size": 1024, "token": "secret", "_type": "FILE"}
+        )
+        photo = PhotoAttachment.model_validate(
+            {
+                "baseUrl": "https://max.example/photo.jpg?signature=secret",
+                "height": 100,
+                "width": 100,
+                "photoId": 8,
+                "photoToken": "secret",
+                "_type": "PHOTO",
+            }
+        )
+        incoming = await self.transport._convert_message(
+            SimpleNamespace(
+                id=3, chat_id=10, sender=100, text="analyze", attaches=[file, photo]
+            ),
+            self.client,
+        )
+        self.assertEqual([item.kind for item in incoming.attachments], ["file", "image"])
+        self.assertEqual(incoming.attachments[0].filename, "report.pdf")
+
+    async def test_rejects_oversized_and_unsupported_files_without_resolving_url(self) -> None:
+        oversized = FileAttachment.model_validate(
+            {
+                "fileId": 7,
+                "name": "archive.zip",
+                "size": 30 * 1024 * 1024,
+                "token": "secret",
+                "_type": "FILE",
+            }
+        )
+        incoming = await self.transport._convert_message(
+            SimpleNamespace(id=4, chat_id=10, sender=100, text="", attaches=[oversized]),
+            self.client,
+        )
+        self.assertIsNotNone(incoming)
+        self.assertEqual(incoming.attachments[0].kind, "unsupported")
+        self.assertNotIn("secret", repr(incoming.attachments[0]))
+
+    async def test_maps_voice_and_audio_file_attachments(self) -> None:
+        voice = AudioAttachment.model_validate(
+            {
+                "audioId": 42,
+                "duration": 8,
+                "url": "https://max.example/voice.ogg?signature=secret",
+                "_type": "AUDIO",
+            }
+        )
+        audio_file = FileAttachment.model_validate(
+            {"fileId": 9, "name": "meeting.mp3", "size": 4096, "token": "secret", "_type": "FILE"}
+        )
+        incoming = await self.transport._convert_message(
+            SimpleNamespace(
+                id=5, chat_id=10, sender=100, text="", attaches=[voice, audio_file]
+            ),
+            self.client,
+        )
+        self.assertEqual([item.kind for item in incoming.attachments], ["audio", "audio"])
+        self.assertEqual(incoming.attachments[0].filename, "voice-42.ogg")
 
     async def test_connection_state_tracks_start_disconnect_and_close(self) -> None:
         self.assertFalse(self.transport.connected)

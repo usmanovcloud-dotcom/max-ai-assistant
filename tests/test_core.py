@@ -7,12 +7,13 @@ from app.core import AssistantCore
 from app.pairing import OwnerGate, PairingManager
 from app.queue import PerChatQueue
 from app.storage import ReservationState, Storage
-from app.transport import IncomingMessage
+from app.transport import IncomingAttachment, IncomingMessage
 
 
 class FakeTransport:
     def __init__(self) -> None:
         self.sent: list[tuple[str, str]] = []
+        self.feedback: list[tuple[str, str]] = []
         self.fail_next_send = False
         self.fail_on_send_number: int | None = None
         self.send_attempts = 0
@@ -30,6 +31,9 @@ class FakeTransport:
             raise ConnectionError("simulated")
         self.sent.append((chat_id, text))
 
+    async def send_feedback(self, chat_id: str, text: str) -> None:
+        self.feedback.append((chat_id, text))
+
     async def close(self) -> None:
         return None
 
@@ -42,7 +46,7 @@ class AssistantCoreTests(unittest.IsolatedAsyncioTestCase):
         self.transport = FakeTransport()
         self.calls = 0
 
-        async def responder(text: str, history: list[tuple[str, str]]) -> str:
+        async def responder(text, history, attachments) -> str:
             self.calls += 1
             return f"echo: {text}"
 
@@ -68,6 +72,7 @@ class AssistantCoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.core.handle(message), "duplicate")
         self.assertEqual(self.calls, 1)
         self.assertEqual("".join(text for _, text in self.transport.sent), "echo: 123456789")
+        self.assertEqual(self.transport.feedback, [("chat", "Готовлю ответ…")])
 
     async def test_other_sender_chat_and_outgoing_are_ignored(self) -> None:
         cases = [
@@ -97,7 +102,7 @@ class AssistantCoreTests(unittest.IsolatedAsyncioTestCase):
     async def test_failed_generation_is_retryable_without_duplicate_input_history(self) -> None:
         attempts = 0
 
-        async def flaky(text: str, history: list[tuple[str, str]]) -> str:
+        async def flaky(text, history, attachments) -> str:
             nonlocal attempts
             attempts += 1
             if attempts == 1:
@@ -129,7 +134,7 @@ class AssistantCoreTests(unittest.IsolatedAsyncioTestCase):
     async def test_new_command_rotates_history_without_recording_command(self) -> None:
         self.storage.append_message("chat", "user", "old")
 
-        async def command_responder(text: str, history: list[tuple[str, str]]) -> str:
+        async def command_responder(text, history, attachments) -> str:
             self.assertEqual(history, [])
             return "new conversation"
 
@@ -137,3 +142,23 @@ class AssistantCoreTests(unittest.IsolatedAsyncioTestCase):
         message = IncomingMessage("m-new", "chat", "owner", "/new", is_direct=True)
         self.assertEqual(await self.core.handle(message), "sent")
         self.assertEqual(self.storage.get_history("chat"), [])
+
+    async def test_attachment_without_caption_gets_default_prompt_and_safe_history(self) -> None:
+        captured = {}
+
+        async def responder(text, history, attachments) -> str:
+            captured.update(text=text, history=history, attachments=attachments)
+            return "done"
+
+        self.core.responder = responder
+        attachment = IncomingAttachment(
+            "file", "report.pdf", "https://max.example/signed-secret"
+        )
+        message = IncomingMessage(
+            "m-file", "chat", "owner", "", is_direct=True, attachments=(attachment,)
+        )
+        self.assertEqual(await self.core.handle(message), "sent")
+        self.assertEqual(captured["text"], "Проанализируй прикреплённый файл.")
+        self.assertEqual(captured["attachments"], (attachment,))
+        self.assertIn("report.pdf", captured["history"][-1][1])
+        self.assertNotIn("signed-secret", str(captured["history"]))

@@ -4,11 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MAX AI Control</title>
+  <link rel="icon" type="image/png" href="/assets/max-ai-logo.png">
   <link rel="stylesheet" href="/assets/styles.css">
 </head>
 <body>
   <aside class="sidebar">
-    <div class="brand"><span class="brand-mark">M</span><div><strong>MAX AI</strong><small>Локальная панель</small></div></div>
+    <div class="brand"><img class="brand-mark" src="/assets/max-ai-logo.png" alt="MAX AI"><div><strong>MAX AI</strong><small>Локальная панель</small></div></div>
     <nav id="nav">
       <button class="nav-item active" data-view="overview">Обзор</button>
       <button class="nav-item" data-view="chat">Диалоги</button>
@@ -85,6 +86,15 @@
         </article>
         <article class="panel">
           <div class="panel-head"><div><h2>Авторизация MAX</h2><p id="qr-phase">Текущая сессия</p></div></div>
+          <ol id="max-auth-steps" class="auth-steps" aria-label="Этапы авторизации MAX">
+            <li data-auth-step="start"><span>1</span><div><strong>Запуск</strong><small>Подготовка клиента MAX</small></div></li>
+            <li data-auth-step="qr"><span>2</span><div><strong>Получение QR</strong><small>Новая ссылка для входа</small></div></li>
+            <li data-auth-step="scan"><span>3</span><div><strong>Сканирование</strong><small>Подтверждение в приложении MAX</small></div></li>
+            <li data-auth-step="twofa"><span>4</span><div><strong>2FA</strong><small>Только если включён пароль</small></div></li>
+            <li data-auth-step="session"><span>5</span><div><strong>Сессия</strong><small>Подключение аккаунта ассистента</small></div></li>
+            <li data-auth-step="claim"><span>6</span><div><strong>Владелец</strong><small>Команда /claim в личном чате</small></div></li>
+            <li data-auth-step="ready"><span>7</span><div><strong>Готово</strong><small>MAX и AI принимают сообщения</small></div></li>
+          </ol>
           <img id="qr-image" class="qr hidden" alt="QR-код MAX">
           <div id="claim-box" class="claim-box hidden">
             <span>После входа отправьте эту команду основным аккаунтом в личный чат ассистента:</span>
@@ -92,7 +102,7 @@
             <button id="copy-claim" type="button" class="button">Копировать команду</button>
           </div>
           <form id="twofa-form" class="inline-form"><input id="twofa-input" type="password" autocomplete="off" placeholder="Пароль 2FA"><button class="button">Передать</button></form>
-          <button id="revoke-max" class="button danger-outline">Выйти и удалить локальную сессию</button>
+          <div class="button-row auth-actions"><button id="refresh-qr" type="button" class="button primary">Запросить новый QR</button><button id="revoke-max" class="button danger-outline">Выйти и удалить локальную сессию</button></div>
         </article>
       </div>
     </section>

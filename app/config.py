@@ -38,6 +38,8 @@ class Settings:
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
     )
+    max_attachment_count: int = 5
+    max_attachment_bytes: int = 20 * 1024 * 1024
     llm_provider: str = "openai"
     llm_base_url: str = "https://api.openai.com/v1"
     llm_model: str = "gpt-5.6-luna"
@@ -48,6 +50,7 @@ class Settings:
     llm_max_retries: int = 2
     llm_history_messages: int = 30
     llm_max_input_chars: int = 24_000
+    llm_transcription_model: str = "gpt-4o-mini-transcribe"
     llm_timezone_offset_minutes: int = 300
     llm_instructions: str = (
         "Ты личный AI-ассистент владельца. Отвечай по-русски, если пользователь "
@@ -112,6 +115,8 @@ class Settings:
                 "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
                 "(KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
             ),
+            max_attachment_count=int(os.getenv("MAX_ATTACHMENT_COUNT", "5")),
+            max_attachment_bytes=int(os.getenv("MAX_ATTACHMENT_BYTES", "20971520")),
             llm_provider=llm_provider,
             llm_base_url=os.getenv("LLM_BASE_URL", default_base_url),
             llm_model=os.getenv("LLM_MODEL", default_model),
@@ -122,6 +127,9 @@ class Settings:
             llm_max_retries=int(os.getenv("LLM_MAX_RETRIES", "2")),
             llm_history_messages=int(os.getenv("LLM_HISTORY_MESSAGES", "30")),
             llm_max_input_chars=int(os.getenv("LLM_MAX_INPUT_CHARS", "24000")),
+            llm_transcription_model=os.getenv(
+                "LLM_TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe"
+            ),
             llm_timezone_offset_minutes=int(
                 os.getenv("LLM_TIMEZONE_OFFSET_MINUTES", "300")
             ),
@@ -157,6 +165,10 @@ class Settings:
             raise ValueError("MAX locale and timezone must not be empty")
         if not self.max_web_header_user_agent.strip():
             raise ValueError("MAX_WEB_HEADER_USER_AGENT must not be empty")
+        if not 1 <= self.max_attachment_count <= 10:
+            raise ValueError("MAX_ATTACHMENT_COUNT must be between 1 and 10")
+        if not 1024 <= self.max_attachment_bytes <= 50 * 1024 * 1024:
+            raise ValueError("MAX_ATTACHMENT_BYTES must be between 1024 and 52428800")
         if self.llm_provider not in {"openai", "openrouter"}:
             raise ValueError("LLM_PROVIDER must be openai or openrouter")
         if not self.llm_base_url.startswith("https://"):
@@ -173,6 +185,8 @@ class Settings:
             raise ValueError("LLM_MAX_RETRIES must be between 0 and 5")
         if self.llm_max_input_chars < 100:
             raise ValueError("LLM_MAX_INPUT_CHARS must be at least 100")
+        if not self.llm_transcription_model.strip():
+            raise ValueError("LLM_TRANSCRIPTION_MODEL must not be empty")
         if not -720 <= self.llm_timezone_offset_minutes <= 840:
             raise ValueError("LLM_TIMEZONE_OFFSET_MINUTES is invalid")
         if not self.llm_instructions.strip():

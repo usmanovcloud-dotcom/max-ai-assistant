@@ -13,6 +13,7 @@ from app.providers.openai_compatible import (
     OpenAITransientError,
 )
 from app.storage import DailyLimitExceeded, Storage
+from app.transport import IncomingAttachment
 
 
 def success_payload(text: str = "Привет") -> dict:
@@ -93,6 +94,63 @@ class OpenAIProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(captured["body"]["store"])
         self.assertNotIn("safety_identifier", captured["body"])
         self.assertNotIn("text", captured["body"])
+
+    async def test_files_and_images_use_responses_multimodal_content(self) -> None:
+        captured = {}
+
+        async def post(url, headers, body, timeout):
+            captured["body"] = body
+            return 200, success_payload("ok"), {}
+
+        provider = OpenAICompatibleProvider(self.config(), self.storage, http_post=post)
+        attachments = (
+            IncomingAttachment("file", "report.pdf", "https://max.example/report"),
+            IncomingAttachment("image", "photo.jpg", "https://max.example/photo"),
+        )
+        self.assertEqual(
+            await provider.complete(
+                [("user", "Что в этих вложениях? [Файл: report.pdf]")],
+                attachments=attachments,
+            ),
+            "ok",
+        )
+        content = captured["body"]["input"][-1]["content"]
+        self.assertEqual(content[0]["type"], "input_text")
+        self.assertEqual(
+            content[1],
+            {
+                "type": "input_file",
+                "filename": "report.pdf",
+                "file_url": "https://max.example/report",
+            },
+        )
+        self.assertEqual(
+            content[2],
+            {"type": "input_image", "image_url": "https://max.example/photo"},
+        )
+
+    async def test_audio_is_transcribed_then_added_to_transient_prompt(self) -> None:
+        captured = {}
+
+        async def post(url, headers, body, timeout):
+            captured["body"] = body
+            return 200, success_payload("summary"), {}
+
+        provider = OpenAICompatibleProvider(self.config(), self.storage, http_post=post)
+        provider._transcribe_audio = AsyncMock(return_value="текст голосового сообщения")
+        audio = IncomingAttachment(
+            "audio", "voice-42.ogg", "https://max.example/voice?signature=secret"
+        )
+        self.assertEqual(
+            await provider.complete(
+                [("user", "Что сказано?")], attachments=(audio,)
+            ),
+            "summary",
+        )
+        prepared = captured["body"]["input"][-1]["content"]
+        self.assertIn("текст голосового сообщения", prepared)
+        self.assertNotIn("signature=secret", str(captured["body"]))
+        provider._transcribe_audio.assert_awaited_once_with(audio)
 
     async def test_payment_required_is_reported_as_quota_error(self) -> None:
         post = AsyncMock(return_value=(402, {"error": {"message": "quota"}}, {}))

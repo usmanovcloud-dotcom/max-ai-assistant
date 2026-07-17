@@ -69,6 +69,8 @@ async def local_security_middleware(request: web.Request, handler: Handler) -> w
                 f"http://localhost:{request.app[SETTINGS_KEY].web_port}",
                 f"http://[::1]:{request.app[SETTINGS_KEY].web_port}",
             }
+            if request.app[SETTINGS_KEY].container_mode:
+                allowed.add(f"{request.scheme}://{request.host}")
             if origin.rstrip("/") not in allowed:
                 raise web.HTTPForbidden(text="Cross-origin request denied")
     response = await handler(request)
@@ -98,7 +100,10 @@ async def status(request: web.Request) -> web.Response:
         for provider in ("openai", "openai-admin", "openrouter")
     }
     payload["app_version"] = __version__
-    payload["security"] = {"loopback_only": True, "public_ports": False}
+    payload["security"] = {
+        "loopback_only": not request.app[SETTINGS_KEY].container_mode,
+        "public_ports": False,
+    }
     payload["audit_latest"] = storage.get_audit(5)
     return web.json_response(payload)
 

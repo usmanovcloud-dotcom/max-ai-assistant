@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "max-ai-assistant"
-version = "0.3.0"
+version = "0.3.1"
 description = "Owner-only personal AI assistant transport for MAX"
 readme = "README.md"
 requires-python = ">=3.10"

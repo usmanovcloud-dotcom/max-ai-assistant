@@ -1,5 +1,6 @@
 import os
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -7,7 +8,7 @@ from aiohttp.test_utils import AioHTTPTestCase
 
 from app.config import Settings
 from app.storage import Storage
-from app.web import PROVIDER_INFO_KEY, create_web_app
+from app.web import PROVIDER_INFO_KEY, SETTINGS_KEY, create_web_app
 
 
 class WebDashboardTests(AioHTTPTestCase):
@@ -49,6 +50,33 @@ class WebDashboardTests(AioHTTPTestCase):
     async def test_mutations_require_dashboard_marker(self) -> None:
         response = await self.client.post("/api/conversations", json={})
         self.assertEqual(response.status, 403)
+
+    async def test_container_mode_allows_lan_same_origin_only(self) -> None:
+        self.app[SETTINGS_KEY] = replace(self.settings, container_mode=True)
+        lan_headers = {
+            "Host": "192.168.0.10:8765",
+            "Origin": "http://192.168.0.10:8765",
+            **self.mutation_headers(),
+        }
+        response = await self.client.post(
+            "/api/conversations", json={}, headers=lan_headers
+        )
+        self.assertEqual(response.status, 201)
+        response = await self.client.get(
+            "/api/status", headers={"Host": "192.168.0.10:8765"}
+        )
+        self.assertFalse((await response.json())["security"]["loopback_only"])
+
+        hostile_headers = {
+            "Host": "192.168.0.10:8765",
+            "Origin": "https://example.com",
+            **self.mutation_headers(),
+        }
+        response = await self.client.post(
+            "/api/conversations", json={}, headers=hostile_headers
+        )
+        self.assertEqual(response.status, 403)
+        self.app[SETTINGS_KEY] = self.settings
 
     async def test_conversation_key_settings_stats_and_backup(self) -> None:
         response = await self.client.post(

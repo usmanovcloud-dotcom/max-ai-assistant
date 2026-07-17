@@ -2,7 +2,7 @@ services:
   max-ai-assistant:
     build:
       context: .
-    image: max-ai-assistant:0.3.0
+    image: max-ai-assistant:0.3.1
     init: true
     restart: unless-stopped
     read_only: true
@@ -47,7 +47,7 @@ services:
     profiles: ["check"]
     build:
       context: .
-    image: max-ai-assistant:0.3.0
+    image: max-ai-assistant:0.3.1
     command: ["python", "-m", "app.main", "init-db"]
     init: true
     restart: "no"

@@ -1,0 +1,66 @@
+services:
+  max-ai-assistant:
+    build:
+      context: .
+    image: max-ai-assistant:0.3.0
+    init: true
+    restart: unless-stopped
+    read_only: true
+    user: "10001:10001"
+    ports:
+      - "127.0.0.1:8765:8765"
+    environment:
+      APP_DATA_DIR: /data
+      MAX_SESSION_PATH: /data/max-session.sqlite3
+      MAX_QR_PATH: /data/login.svg
+      MAX_QR_STATUS_PATH: /data/qr-status.json
+      CLAIM_COMMAND_PATH: /data/claim-command.txt
+      MAX_2FA_FILE: /run/secrets/max-ai/max-2fa.txt
+      LLM_PROVIDER: openai
+      LLM_BASE_URL: https://api.openai.com/v1
+      LLM_MODEL: gpt-5.6-luna
+      LLM_API_KEY_FILE: /run/secrets/max-ai/openai-api-key.txt
+      OPENAI_MONTHLY_BUDGET_USD: "10"
+      LOG_LEVEL: INFO
+      PYMAX_TELEMETRY_ENABLED: "false"
+      WEB_HOST: 0.0.0.0
+      WEB_PORT: "8765"
+      WEB_AUTOSTART_AI: "true"
+      CONTAINER_MODE: "true"
+    volumes:
+      - ./data:/data
+      - ./secrets:/run/secrets/max-ai
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.main", "web-healthcheck"]
+      interval: 30s
+      timeout: 8s
+      start_period: 20s
+      retries: 3
+
+  stage1-check:
+    profiles: ["check"]
+    build:
+      context: .
+    image: max-ai-assistant:0.3.0
+    command: ["python", "-m", "app.main", "init-db"]
+    init: true
+    restart: "no"
+    read_only: true
+    environment:
+      APP_DATA_DIR: /data
+      CONTAINER_MODE: "true"
+      WEB_HOST: 0.0.0.0
+    volumes:
+      - ./data:/data
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

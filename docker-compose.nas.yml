@@ -1,0 +1,55 @@
+services:
+  max-ai-assistant:
+    image: ghcr.io/usmanovcloud-dotcom/max-ai-assistant:latest
+    pull_policy: always
+    container_name: max-ai-assistant
+    init: true
+    restart: unless-stopped
+    read_only: true
+    user: "10001:10001"
+    ports:
+      - "127.0.0.1:8765:8765"
+    environment:
+      APP_DATA_DIR: /data
+      MAX_SESSION_PATH: /data/max-session.sqlite3
+      MAX_QR_PATH: /data/login.svg
+      MAX_QR_STATUS_PATH: /data/qr-status.json
+      CLAIM_COMMAND_PATH: /data/claim-command.txt
+      MAX_2FA_FILE: /run/secrets/max-ai/max-2fa.txt
+      LLM_PROVIDER: openai
+      LLM_BASE_URL: https://api.openai.com/v1
+      LLM_MODEL: gpt-5.6-luna
+      LLM_API_KEY_FILE: /run/secrets/max-ai/openai-api-key.txt
+      OPENAI_MONTHLY_BUDGET_USD: "10"
+      LOG_LEVEL: INFO
+      PYMAX_TELEMETRY_ENABLED: "false"
+      WEB_HOST: 0.0.0.0
+      WEB_PORT: "8765"
+      WEB_AUTOSTART_AI: "true"
+      CONTAINER_MODE: "true"
+    volumes:
+      - max-ai-data:/data
+      - max-ai-secrets:/run/secrets/max-ai
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.main", "web-healthcheck"]
+      interval: 30s
+      timeout: 8s
+      start_period: 30s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  max-ai-data:
+    name: max-ai-assistant-data
+  max-ai-secrets:
+    name: max-ai-assistant-secrets

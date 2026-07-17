@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MAX AI Control</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand"><span class="brand-mark">M</span><div><strong>MAX AI</strong><small>Локальная панель</small></div></div>
+    <nav id="nav">
+      <button class="nav-item active" data-view="overview">Обзор</button>
+      <button class="nav-item" data-view="chat">Диалоги</button>
+      <button class="nav-item" data-view="max">MAX</button>
+      <button class="nav-item" data-view="keys">API-ключи</button>
+      <button class="nav-item" data-view="settings">Настройки AI</button>
+      <button class="nav-item" data-view="n8n">n8n</button>
+      <button class="nav-item" data-view="stats">Статистика</button>
+      <button class="nav-item" data-view="logs">Журнал</button>
+    </nav>
+    <div class="sidebar-foot">
+      <span class="security-dot"></span> Только этот компьютер
+      <span id="app-version"></span>
+      <button id="theme-toggle" class="icon-button" title="Сменить тему">◐</button>
+    </div>
+  </aside>
+
+  <main>
+    <header class="topbar">
+      <div><h1 id="page-title">Обзор</h1><p id="page-subtitle">Состояние персонального ассистента</p></div>
+      <div class="top-actions"><span id="global-state" class="badge neutral">Проверка…</span><button id="refresh" class="button ghost">Обновить</button></div>
+    </header>
+
+    <div id="notice" class="notice hidden"></div>
+
+    <section id="view-overview" class="view active">
+      <div class="metric-grid">
+        <article class="metric"><span>MAX</span><strong id="metric-max">—</strong><small id="metric-max-detail">Состояние соединения</small></article>
+        <article class="metric"><span>AI-процесс</span><strong id="metric-runtime">—</strong><small id="metric-uptime">Время работы</small></article>
+        <article class="metric"><span>Провайдер</span><strong id="metric-provider">—</strong><small id="metric-model">Модель</small></article>
+        <article class="metric"><span>Очередь</span><strong id="metric-queue">—</strong><small id="metric-errors">Ошибки обработки</small></article>
+        <article class="metric"><span>Остаток</span><strong id="metric-balance">—</strong><small id="metric-balance-detail">Баланс и дневной лимит</small></article>
+      </div>
+      <div class="grid two">
+        <article class="panel">
+          <div class="panel-head"><div><h2>Управление</h2><p>Единый процесс MAX и AI</p></div></div>
+          <div class="button-row">
+            <button data-runtime="start" class="button primary">Запустить</button>
+            <button data-runtime="restart" class="button">Перезапустить</button>
+            <button data-runtime="stop" class="button danger-outline">Остановить</button>
+          </div>
+          <dl class="details">
+            <div><dt>Владелец</dt><dd id="owner-state">—</dd></div>
+            <div><dt>Последняя ошибка</dt><dd id="last-error">Нет</dd></div>
+            <div><dt>Безопасность</dt><dd>127.0.0.1, без внешнего порта</dd></div>
+          </dl>
+        </article>
+        <article class="panel">
+          <div class="panel-head"><div><h2>Последние действия</h2><p>Без значений ключей и текстов сообщений</p></div></div>
+          <div id="audit-mini" class="timeline empty">Действий пока нет</div>
+        </article>
+      </div>
+    </section>
+
+    <section id="view-chat" class="view">
+      <div class="chat-layout panel">
+        <aside class="conversation-sidebar">
+          <button id="new-conversation" class="button primary full">+ Новый диалог</button>
+          <div id="conversation-list" class="conversation-list"></div>
+        </aside>
+        <div class="chat-main">
+          <div class="chat-toolbar"><strong id="chat-title">Выберите диалог</strong><div><button id="export-chat" class="icon-button" title="Экспорт">⇩</button><button id="clear-chat" class="icon-button" title="Очистить">⌫</button><button id="delete-chat" class="icon-button danger-text" title="Удалить">×</button></div></div>
+          <div id="messages" class="messages"><div class="empty-state"><strong>Веб-диалог с ассистентом</strong><span>Создайте диалог и напишите сообщение</span></div></div>
+          <form id="chat-form" class="composer"><textarea id="chat-input" rows="2" maxlength="24000" placeholder="Сообщение ассистенту…" disabled></textarea><button class="button primary" disabled>Отправить</button></form>
+        </div>
+      </div>
+    </section>
+
+    <section id="view-max" class="view">
+      <div class="grid two">
+        <article class="panel">
+          <div class="panel-head"><div><h2>Сообщение владельцу</h2><p>Отправка из панели в личный чат MAX</p></div></div>
+          <form id="max-form" class="stack"><textarea id="max-input" rows="5" maxlength="3500" placeholder="Текст сообщения"></textarea><button class="button primary">Отправить в MAX</button></form>
+        </article>
+        <article class="panel">
+          <div class="panel-head"><div><h2>Авторизация MAX</h2><p id="qr-phase">Текущая сессия</p></div></div>
+          <img id="qr-image" class="qr hidden" alt="QR-код MAX">
+          <div id="claim-box" class="claim-box hidden">
+            <span>После входа отправьте эту команду основным аккаунтом в личный чат ассистента:</span>
+            <code id="claim-command"></code>
+            <button id="copy-claim" type="button" class="button">Копировать команду</button>
+          </div>
+          <form id="twofa-form" class="inline-form"><input id="twofa-input" type="password" autocomplete="off" placeholder="Пароль 2FA"><button class="button">Передать</button></form>
+          <button id="revoke-max" class="button danger-outline">Выйти и удалить локальную сессию</button>
+        </article>
+      </div>
+    </section>
+
+    <section id="view-keys" class="view">
+      <div class="grid two" id="key-cards"></div>
+      <div class="callout">Ключ после сохранения нельзя прочитать через панель. Отображается только маска; файлы ключей исключены из Git и резервной копии.</div>
+    </section>
+
+    <section id="view-settings" class="view">
+      <form id="settings-form" class="panel settings-grid">
+        <label>Провайдер<select name="llm_provider"><option value="openrouter">OpenRouter</option><option value="openai">OpenAI</option></select></label>
+        <label>Версия AI / модель<span class="input-action"><select id="model-select" name="llm_model" required><option>Загрузка…</option></select><button id="refresh-models" type="button" class="icon-button" title="Обновить каталог">↻</button></span></label>
+        <label class="wide">Base URL<input name="llm_base_url" type="url" required></label>
+        <label>Таймаут, сек.<input name="llm_timeout" type="number" min="5" step="1"></label>
+        <label>Повторы<input name="llm_max_retries" type="number" min="0" max="5"></label>
+        <label>Лимит запросов/день<input name="llm_daily_limit" type="number" min="1"></label>
+        <label>Лимит токенов/день<input name="llm_daily_token_limit" type="number" min="1"></label>
+        <label>Токенов в ответе<input name="llm_max_output_tokens" type="number" min="16"></label>
+        <label>Сообщений в истории<input name="llm_history_messages" type="number" min="1"></label>
+        <label>Максимум символов на вход<input name="llm_max_input_chars" type="number" min="100"></label>
+        <label>Месячный бюджет OpenAI, $<input name="openai_monthly_budget_usd" type="number" min="0.01" step="0.01"></label>
+        <label class="wide">Инструкция ассистента<textarea name="llm_instructions" rows="7" required></textarea></label>
+        <div class="wide form-actions"><span>При сохранении активный AI-процесс безопасно перезапустится.</span><button class="button primary">Сохранить настройки</button></div>
+      </form>
+    </section>
+
+    <section id="view-n8n" class="view">
+      <form id="n8n-form" class="panel settings-grid">
+        <div class="wide integration-toggle"><div><h2>Вывод ответов в n8n</h2><p>После ответа AI отправлять prompt и response в настроенный Webhook node</p></div><label class="switch"><input id="n8n-enabled" type="checkbox"><span></span></label></div>
+        <label class="wide">Production webhook URL<input id="n8n-url" type="password" autocomplete="off" placeholder="https://n8n.example/webhook/…"></label>
+        <label class="wide">Bearer token, если используется<input id="n8n-token" type="password" autocomplete="off" placeholder="Оставьте пустым, чтобы не менять"></label>
+        <div class="wide key-state" id="n8n-state">Не настроено</div>
+        <div class="wide callout warning">При включении текст вопроса и ответа будет передаваться на указанный вами n8n webhook. По умолчанию интеграция выключена.</div>
+        <div class="wide form-actions"><button id="test-n8n" type="button" class="button">Проверить webhook</button><button class="button primary">Сохранить</button></div>
+      </form>
+    </section>
+
+    <section id="view-stats" class="view">
+      <div class="metric-grid">
+        <article class="metric"><span>Запросы</span><strong id="stat-total">0</strong><small id="stat-success">0 успешных</small></article>
+        <article class="metric"><span>Токены</span><strong id="stat-tokens">0</strong><small id="stat-token-split">0 / 0</small></article>
+        <article class="metric"><span>Средняя задержка</span><strong id="stat-latency">0 с</strong><small>Успешные ответы</small></article>
+        <article class="metric"><span>Стоимость</span><strong id="stat-cost">$0</strong><small>Если сообщает провайдер</small></article>
+      </div>
+      <div class="grid two">
+        <article class="panel"><h2>По дням</h2><div id="daily-chart" class="bar-chart"></div></article>
+        <article class="panel"><h2>По моделям</h2><div id="model-stats" class="table-list"></div></article>
+      </div>
+    </section>
+
+    <section id="view-logs" class="view">
+      <div class="panel">
+        <div class="panel-head"><div><h2>Безопасный журнал</h2><p>API-ключи автоматически маскируются, тексты диалогов не журналируются</p></div><a class="button" href="/api/backup">Скачать резервную копию</a></div>
+        <div class="log-tabs"><button class="active" data-log="runtime">Процесс</button><button data-log="audit">Аудит</button></div>
+        <div id="log-list" class="log-list"></div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/assets/app.js" defer></script>
+  <script src="/assets/enhancements.js" defer></script>
+</body>
+</html>

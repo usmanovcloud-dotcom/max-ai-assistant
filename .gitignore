@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+.venv/
+.env
+data/*
+!data/.gitkeep
+secrets/*
+!secrets/.gitkeep
+*.sqlite
+*.sqlite3
+*.db
+*.log
+*.zip

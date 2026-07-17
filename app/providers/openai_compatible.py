@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import mimetypes
 import re
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -186,13 +187,15 @@ class OpenAICompatibleProvider:
                             {"type": "input_image", "image_url": attachment.url}
                         )
                     elif attachment.kind == "file":
-                        content.append(
-                            {
-                                "type": "input_file",
-                                "filename": attachment.filename,
-                                "file_url": attachment.url,
-                            }
-                        )
+                        file_input = {
+                            "type": "input_file",
+                            "filename": attachment.filename,
+                        }
+                        if attachment.url.startswith("data:"):
+                            file_input["file_data"] = attachment.url
+                        else:
+                            file_input["file_url"] = attachment.url
+                        content.append(file_input)
                 item["content"] = content
                 break
         return prepared
@@ -208,6 +211,7 @@ class OpenAICompatibleProvider:
             prepared_messages, prepared_attachments = await self._prepare_audio(
                 messages, attachments
             )
+            prepared_attachments = await self._prepare_files(prepared_attachments)
             text, input_tokens, output_tokens, model, cost = await self._complete(
                 prepared_messages, prepared_attachments
             )
@@ -253,6 +257,50 @@ class OpenAICompatibleProvider:
                 prepared[index] = (role, "\n\n".join([content, *transcripts]))
                 break
         return prepared, remaining
+
+    async def _prepare_files(
+        self, attachments: Sequence[IncomingAttachment]
+    ) -> tuple[IncomingAttachment, ...]:
+        prepared: list[IncomingAttachment] = []
+        for attachment in attachments:
+            if attachment.kind != "file":
+                prepared.append(attachment)
+                continue
+            payload = await self._download_attachment(attachment)
+            content_type = (
+                mimetypes.guess_type(attachment.filename)[0]
+                or "application/octet-stream"
+            )
+            encoded = base64.b64encode(payload).decode("ascii")
+            prepared.append(
+                replace(
+                    attachment,
+                    url=f"data:{content_type};base64,{encoded}",
+                )
+            )
+        return tuple(prepared)
+
+    async def _download_attachment(self, attachment: IncomingAttachment) -> bytes:
+        if not attachment.url:
+            raise OpenAIProviderError("File attachment URL is unavailable")
+        import aiohttp
+
+        timeout = aiohttp.ClientTimeout(total=self.config.timeout_seconds)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(attachment.url) as download:
+                    if download.status < 200 or download.status >= 300:
+                        raise OpenAIProviderError("Unable to download MAX attachment")
+                    payload = bytearray()
+                    async for chunk in download.content.iter_chunked(64 * 1024):
+                        payload.extend(chunk)
+                        if len(payload) > self.config.max_attachment_bytes:
+                            raise OpenAIInputTooLong(
+                                "File attachment exceeds size limit"
+                            )
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            raise OpenAITransientError("MAX attachment download failed") from exc
+        return bytes(payload)
 
     async def _transcribe_audio(self, attachment: IncomingAttachment) -> str:
         if self.config.provider_name != "openai":

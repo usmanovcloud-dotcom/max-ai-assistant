@@ -5,6 +5,7 @@ __pycache__/
 .coverage
 .venv/
 .env
+.tools/
 data/*
 !data/.gitkeep
 secrets/*

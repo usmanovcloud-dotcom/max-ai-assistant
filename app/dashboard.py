@@ -8,6 +8,7 @@ from typing import Any, Mapping
 import aiohttp
 
 from app.config import Settings
+from app.providers.openai_compatible import safe_provider_error_details
 from app.storage import Storage
 
 
@@ -142,9 +143,22 @@ class SecretStore:
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.get(f"{base_url}/models", headers=headers) as response:
                     ok = 200 <= response.status < 300
+                    payload: Mapping[str, Any] = {}
+                    if not ok:
+                        try:
+                            loaded = await response.json(content_type=None)
+                            if isinstance(loaded, Mapping):
+                                payload = loaded
+                        except (aiohttp.ClientError, ValueError):
+                            payload = {}
                     self.storage.add_audit(
                         "api_key_tested", f"provider={provider},ok={str(ok).lower()}"
                     )
-                    return {"ok": ok, "status": response.status}
+                    result: dict[str, Any] = {"ok": ok, "status": response.status}
+                    if not ok:
+                        result["error"] = safe_provider_error_details(
+                            response.status, payload
+                        )
+                    return result
         except (aiohttp.ClientError, TimeoutError) as exc:
             raise RuntimeError("Provider connection failed") from exc

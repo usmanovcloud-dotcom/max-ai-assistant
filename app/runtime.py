@@ -15,6 +15,7 @@ from app.providers.openai_compatible import (
     OpenAICompatibleConfig,
     OpenAICompatibleProvider,
     OpenAIInputTooLong,
+    OpenAIPermissionError,
     OpenAIProviderError,
     OpenAIQuotaError,
     OpenAITransientError,
@@ -98,6 +99,21 @@ class LLMResponder:
         except OpenAIAuthenticationError:
             self.logger.error("LLM authentication failed provider=%s", self.provider_name)
             return f"{self.provider_label} отклонил API-ключ. Проверьте локальный secret-файл."
+        except OpenAIPermissionError as exc:
+            code = exc.details.get("code")
+            if code is not None and str(code) == str(exc.status):
+                code = None
+            reason = code or exc.details.get("type") or "forbidden"
+            self.logger.error(
+                "LLM permission denied provider=%s status=%s reason=%s",
+                self.provider_name,
+                exc.status,
+                reason,
+            )
+            return (
+                f"{self.provider_label} запретил запрос: HTTP {exc.status or 403}, "
+                f"причина {reason}."
+            )
         except OpenAIQuotaError:
             self.logger.warning("LLM quota is unavailable provider=%s", self.provider_name)
             return f"У {self.provider_label} закончилась доступная квота."

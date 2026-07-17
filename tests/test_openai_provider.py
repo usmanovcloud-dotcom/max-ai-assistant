@@ -8,6 +8,7 @@ from app.providers.openai_compatible import (
     OpenAICompatibleConfig,
     OpenAICompatibleProvider,
     OpenAIInputTooLong,
+    OpenAIPermissionError,
     OpenAIQuotaError,
     OpenAITransientError,
 )
@@ -107,6 +108,31 @@ class OpenAIProviderTests(unittest.IsolatedAsyncioTestCase):
         provider = OpenAICompatibleProvider(self.config(max_retries=2), self.storage, http_post=post)
         with self.assertRaises(OpenAIAuthenticationError):
             await provider.complete([("user", "hello")])
+        self.assertEqual(post.await_count, 1)
+
+    async def test_forbidden_error_preserves_only_safe_diagnostics(self) -> None:
+        post = AsyncMock(
+            return_value=(
+                403,
+                {
+                    "error": {
+                        "code": "permission_denied",
+                        "message": "Key sk-proj-secretvalue is blocked",
+                        "metadata": {"flagged_input": "private prompt"},
+                    },
+                    "error_type": "permission_denied",
+                },
+                {},
+            )
+        )
+        provider = OpenAICompatibleProvider(self.config(), self.storage, http_post=post)
+        with self.assertRaises(OpenAIPermissionError) as caught:
+            await provider.complete([("user", "hello")])
+
+        self.assertEqual(caught.exception.status, 403)
+        self.assertEqual(caught.exception.details["type"], "permission_denied")
+        self.assertIn("[redacted]", caught.exception.details["message"])
+        self.assertNotIn("private prompt", str(caught.exception.details))
         self.assertEqual(post.await_count, 1)
 
     async def test_transient_error_is_retried_without_new_daily_reservation(self) -> None:

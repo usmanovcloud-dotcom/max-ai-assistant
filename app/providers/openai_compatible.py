@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -19,10 +20,23 @@ HttpPost = Callable[
 
 
 class OpenAIProviderError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        status: int | None = None,
+        details: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status = status
+        self.details = dict(details or {})
 
 
 class OpenAIAuthenticationError(OpenAIProviderError):
+    pass
+
+
+class OpenAIPermissionError(OpenAIProviderError):
     pass
 
 
@@ -36,6 +50,52 @@ class OpenAIQuotaError(OpenAIProviderError):
 
 class OpenAITransientError(OpenAIProviderError):
     pass
+
+
+_SECRET_PATTERN = re.compile(r"(?i)(?:bearer\s+)?sk-[a-z0-9_-]{8,}")
+
+
+def safe_provider_error_details(
+    status: int, payload: Mapping[str, Any] | None
+) -> dict[str, Any]:
+    """Extract provider diagnostics without returning metadata, prompts, or secrets."""
+    source = payload if isinstance(payload, Mapping) else {}
+    error = source.get("error")
+    error = error if isinstance(error, Mapping) else {}
+
+    def clean(value: Any, limit: int = 240) -> str | None:
+        if not isinstance(value, (str, int, float)):
+            return None
+        text = " ".join(str(value).split())
+        text = _SECRET_PATTERN.sub("[redacted]", text)
+        return text[:limit] or None
+
+    code = clean(error.get("code") or source.get("code"), 80)
+    error_type = clean(
+        source.get("error_type") or error.get("type") or error.get("error_type"), 80
+    )
+    message = clean(error.get("message") or source.get("message"))
+    return {
+        key: value
+        for key, value in {
+            "status": int(status),
+            "code": code,
+            "type": error_type,
+            "message": message,
+        }.items()
+        if value is not None
+    }
+
+
+def provider_error_summary(details: Mapping[str, Any]) -> str:
+    status = details.get("status")
+    code = details.get("code")
+    if code is not None and str(code) == str(status):
+        code = None
+    label = code or details.get("type") or details.get("message")
+    if label:
+        return f"HTTP {status}: {label}" if status else str(label)
+    return f"HTTP {status}" if status else "provider error"
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,12 +258,32 @@ class OpenAICompatibleProvider:
                     str(payload.get("model") or self.config.model),
                     cost,
                 )
-            if status in {401, 403}:
-                raise OpenAIAuthenticationError("LLM provider rejected the API credentials")
+            details = safe_provider_error_details(status, payload)
+            summary = provider_error_summary(details)
+            if status == 401:
+                raise OpenAIAuthenticationError(
+                    f"LLM authentication failed ({summary})",
+                    status=status,
+                    details=details,
+                )
+            if status == 403:
+                raise OpenAIPermissionError(
+                    f"LLM request is forbidden ({summary})",
+                    status=status,
+                    details=details,
+                )
             if status == 402:
-                raise OpenAIQuotaError("LLM provider quota is unavailable")
+                raise OpenAIQuotaError(
+                    f"LLM provider quota is unavailable ({summary})",
+                    status=status,
+                    details=details,
+                )
             if status == 400:
-                raise OpenAIProviderError("LLM provider rejected the request")
+                raise OpenAIProviderError(
+                    f"LLM provider rejected the request ({summary})",
+                    status=status,
+                    details=details,
+                )
             if status == 429:
                 error = payload.get("error") or {}
                 if error.get("code") == "insufficient_quota":

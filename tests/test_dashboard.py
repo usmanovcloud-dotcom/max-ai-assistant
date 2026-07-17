@@ -46,3 +46,65 @@ class DashboardSettingsTests(unittest.TestCase):
         self.assertNotIn(key, str(status))
         self.assertTrue(secrets.delete("openrouter"))
         self.assertFalse(secrets.status("openrouter")["configured"])
+
+
+class _FakeResponse:
+    status = 403
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def json(self, **kwargs):
+        return {
+            "error": {
+                "code": "permission_denied",
+                "message": "Key sk-or-v1-secretvalue cannot use this endpoint",
+                "metadata": {"flagged_input": "must never be returned"},
+            },
+            "error_type": "permission_denied",
+        }
+
+
+class _FakeSession:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    def get(self, *args, **kwargs):
+        return _FakeResponse()
+
+
+class DashboardProviderDiagnosticTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        root = Path(self.temp.name)
+        env = {
+            "APP_DATA_DIR": str(root / "data"),
+            "LLM_API_KEY_FILE": str(root / "secrets" / "openrouter-api-key.txt"),
+            "WEB_AUTOSTART_AI": "false",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            self.settings = Settings.from_env()
+        self.storage = Storage(self.settings.database_path)
+        self.storage.initialize()
+
+    async def asyncTearDown(self) -> None:
+        self.temp.cleanup()
+
+    async def test_key_test_returns_sanitized_provider_reason(self) -> None:
+        secrets = SecretStore(self.settings, self.storage)
+        secrets.save("openrouter", "sk-or-v1-" + "x" * 40)
+        with patch("app.dashboard.aiohttp.ClientSession", return_value=_FakeSession()):
+            result = await secrets.test("openrouter")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["status"], 403)
+        self.assertEqual(result["error"]["type"], "permission_denied")
+        self.assertIn("[redacted]", result["error"]["message"])
+        self.assertNotIn("secretvalue", str(result))
+        self.assertNotIn("flagged_input", str(result))

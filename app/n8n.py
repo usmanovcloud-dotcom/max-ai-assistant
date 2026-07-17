@@ -6,6 +6,8 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any
+
+from app.transport import IncomingAttachment
 from urllib.parse import urlsplit
 
 import aiohttp
@@ -188,8 +190,13 @@ class ForwardingResponder:
         self.source = source
         self.provider = responder.provider
 
-    async def __call__(self, text: str, history: list[tuple[str, str]]) -> str:
-        answer = await self.responder(text, history)
+    async def __call__(
+        self,
+        text: str,
+        history: list[tuple[str, str]],
+        attachments: tuple[IncomingAttachment, ...] = (),
+    ) -> str:
+        answer = await self.responder(text, history, attachments)
         self.forwarder.schedule(
             source=self.source,
             provider=self.provider.config.provider_name,

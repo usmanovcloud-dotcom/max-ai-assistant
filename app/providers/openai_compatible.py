@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import mimetypes
 import re
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -12,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from app.storage import DailyLimitExceeded, Storage
+from app.transport import IncomingAttachment
 
 HttpPost = Callable[
     [str, Mapping[str, str], Mapping[str, Any], float],
@@ -115,6 +117,8 @@ class OpenAICompatibleConfig:
     reasoning_effort: str = "low"
     verbosity: str = "medium"
     source: str = "max"
+    transcription_model: str = "gpt-4o-mini-transcribe"
+    max_attachment_bytes: int = 20 * 1024 * 1024
     instructions: str = (
         "Ты личный AI-ассистент владельца. Отвечай по-русски, если пользователь "
         "не попросил иначе. Будь практичным и не утверждай, что выполнил внешнее "
@@ -148,8 +152,10 @@ class OpenAICompatibleProvider:
         return datetime.now(local_timezone).date().isoformat()
 
     def _prepare_input(
-        self, messages: Sequence[tuple[str, str]]
-    ) -> list[dict[str, str]]:
+        self,
+        messages: Sequence[tuple[str, str]],
+        attachments: Sequence[IncomingAttachment] = (),
+    ) -> list[dict[str, Any]]:
         if messages and len(messages[-1][1]) > self.config.max_input_chars:
             raise OpenAIInputTooLong("latest message exceeds input limit")
         selected: list[tuple[str, str]] = []
@@ -161,15 +167,50 @@ class OpenAICompatibleProvider:
                 break
             selected.append((role, content))
             used += len(content)
-        return [
+        prepared: list[dict[str, Any]] = [
             {"role": role, "content": content}
             for role, content in reversed(selected)
         ]
+        if attachments:
+            for item in reversed(prepared):
+                if item["role"] != "user":
+                    continue
+                content: list[dict[str, str]] = [
+                    {"type": "input_text", "text": str(item["content"])}
+                ]
+                for attachment in attachments:
+                    if attachment.url is None:
+                        continue
+                    if attachment.kind == "image":
+                        content.append(
+                            {"type": "input_image", "image_url": attachment.url}
+                        )
+                    elif attachment.kind == "file":
+                        content.append(
+                            {
+                                "type": "input_file",
+                                "filename": attachment.filename,
+                                "file_url": attachment.url,
+                            }
+                        )
+                item["content"] = content
+                break
+        return prepared
 
-    async def complete(self, messages: Sequence[tuple[str, str]]) -> str:
+    async def complete(
+        self,
+        messages: Sequence[tuple[str, str]],
+        *,
+        attachments: Sequence[IncomingAttachment] = (),
+    ) -> str:
         started = time.monotonic()
         try:
-            text, input_tokens, output_tokens, model, cost = await self._complete(messages)
+            prepared_messages, prepared_attachments = await self._prepare_audio(
+                messages, attachments
+            )
+            text, input_tokens, output_tokens, model, cost = await self._complete(
+                prepared_messages, prepared_attachments
+            )
         except Exception as exc:
             self.storage.record_llm_event(
                 provider=self.config.provider_name,
@@ -192,11 +233,84 @@ class OpenAICompatibleProvider:
         )
         return text
 
+    async def _prepare_audio(
+        self,
+        messages: Sequence[tuple[str, str]],
+        attachments: Sequence[IncomingAttachment],
+    ) -> tuple[list[tuple[str, str]], tuple[IncomingAttachment, ...]]:
+        audio = [item for item in attachments if item.kind == "audio"]
+        remaining = tuple(item for item in attachments if item.kind != "audio")
+        if not audio:
+            return list(messages), remaining
+        transcripts: list[str] = []
+        for item in audio:
+            transcript = await self._transcribe_audio(item)
+            transcripts.append(f"[Транскрипция {item.filename}]\n{transcript}")
+        prepared = list(messages)
+        for index in range(len(prepared) - 1, -1, -1):
+            role, content = prepared[index]
+            if role == "user":
+                prepared[index] = (role, "\n\n".join([content, *transcripts]))
+                break
+        return prepared, remaining
+
+    async def _transcribe_audio(self, attachment: IncomingAttachment) -> str:
+        if self.config.provider_name != "openai":
+            raise OpenAIProviderError(
+                "Audio transcription requires the official OpenAI provider"
+            )
+        if not attachment.url:
+            raise OpenAIProviderError("Audio attachment URL is unavailable")
+        import aiohttp
+
+        timeout = aiohttp.ClientTimeout(total=self.config.timeout_seconds)
+        headers = {"Authorization": f"Bearer {self.config.read_api_key()}"}
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(attachment.url) as download:
+                    if download.status < 200 or download.status >= 300:
+                        raise OpenAIProviderError("Unable to download MAX audio")
+                    payload = bytearray()
+                    async for chunk in download.content.iter_chunked(64 * 1024):
+                        payload.extend(chunk)
+                        if len(payload) > self.config.max_attachment_bytes:
+                            raise OpenAIInputTooLong("Audio attachment exceeds size limit")
+                form = aiohttp.FormData()
+                form.add_field("model", self.config.transcription_model)
+                form.add_field(
+                    "file",
+                    bytes(payload),
+                    filename=attachment.filename,
+                    content_type=mimetypes.guess_type(attachment.filename)[0]
+                    or "application/octet-stream",
+                )
+                url = self.config.base_url.rstrip("/") + "/audio/transcriptions"
+                async with session.post(url, headers=headers, data=form) as response:
+                    try:
+                        result = await response.json(content_type=None)
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        result = {}
+                    if response.status < 200 or response.status >= 300:
+                        details = safe_provider_error_details(response.status, result)
+                        raise OpenAIProviderError(
+                            f"Audio transcription failed ({provider_error_summary(details)})",
+                            status=response.status,
+                            details=details,
+                        )
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            raise OpenAITransientError("Audio transcription request failed") from exc
+        text = str(result.get("text") or "").strip()
+        if not text:
+            raise OpenAIProviderError("Audio transcription is empty")
+        return text
+
     async def _complete(
-        self, messages: Sequence[tuple[str, str]]
+        self,
+        messages: Sequence[tuple[str, str]],
+        attachments: Sequence[IncomingAttachment] = (),
     ) -> tuple[str, int, int, str, float | None]:
         api_key = self.config.read_api_key()
-        prepared = self._prepare_input(messages)
+        prepared = self._prepare_input(messages, attachments)
         if not prepared:
             raise OpenAIProviderError("LLM input is empty")
 

@@ -1,12 +1,36 @@
 services:
+  storage-init:
+    image: ghcr.io/usmanovcloud-dotcom/max-ai-assistant:latest
+    pull_policy: always
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        mkdir -p /data /secrets &&
+        chown -R 1032:100 /data /secrets
+    restart: "no"
+    volumes:
+      - /volume1/docker/max-ai-assistant/data:/data
+      - /volume1/docker/max-ai-assistant/secrets:/secrets
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+
   max-ai-assistant:
     image: ghcr.io/usmanovcloud-dotcom/max-ai-assistant:latest
     pull_policy: always
     container_name: max-ai-assistant
+    depends_on:
+      storage-init:
+        condition: service_completed_successfully
     init: true
     restart: unless-stopped
     read_only: true
-    user: "10001:10001"
+    # UID/GID of the DSM ChatGPT user. Synology ACL grants this account write access.
+    user: "1032:100"
     ports:
       - "8765:8765"
     environment:
@@ -19,6 +43,7 @@ services:
       LLM_PROVIDER: openai
       LLM_BASE_URL: https://api.openai.com/v1
       LLM_MODEL: gpt-5.6-luna
+      LLM_TRANSCRIPTION_MODEL: gpt-4o-mini-transcribe
       LLM_API_KEY_FILE: /run/secrets/max-ai/openai-api-key.txt
       OPENAI_MONTHLY_BUDGET_USD: "10"
       LOG_LEVEL: INFO
@@ -28,8 +53,9 @@ services:
       WEB_AUTOSTART_AI: "true"
       CONTAINER_MODE: "true"
     volumes:
-      - max-ai-data:/data
-      - max-ai-secrets:/run/secrets/max-ai
+      # NAS bind mounts survive project/YAML recreation and remain easy to back up.
+      - /volume1/docker/max-ai-assistant/data:/data
+      - /volume1/docker/max-ai-assistant/secrets:/run/secrets/max-ai
     tmpfs:
       - /tmp:size=32m,noexec,nosuid
     security_opt:
@@ -47,9 +73,3 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-
-volumes:
-  max-ai-data:
-    name: max-ai-assistant-data
-  max-ai-secrets:
-    name: max-ai-assistant-secrets

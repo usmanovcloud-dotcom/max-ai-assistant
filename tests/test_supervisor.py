@@ -1,9 +1,10 @@
 import asyncio
+import json
 import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from app.config import Settings
 from app.monitoring import RingLogHandler
@@ -12,6 +13,28 @@ from app.supervisor import AssistantSupervisor
 
 
 class SupervisorRestartTests(unittest.IsolatedAsyncioTestCase):
+    async def test_new_qr_removes_old_session_and_restarts_authorization(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory, patch.dict(
+            os.environ, {"APP_DATA_DIR": directory}, clear=True
+        ):
+            settings = Settings.from_env()
+            storage = Storage(settings.database_path)
+            storage.initialize()
+            supervisor = AssistantSupervisor(settings, storage, RingLogHandler())
+            for path in (settings.max_session_path, settings.qr_path, settings.qr_status_path):
+                path.write_text("old", encoding="utf-8")
+            supervisor.stop = AsyncMock()
+            supervisor.start = AsyncMock()
+
+            await supervisor.request_new_qr()
+
+            supervisor.stop.assert_awaited_once()
+            supervisor.start.assert_awaited_once()
+            self.assertFalse(settings.max_session_path.exists())
+            self.assertFalse(settings.qr_path.exists())
+            status = json.loads(settings.qr_status_path.read_text(encoding="utf-8"))
+            self.assertEqual(status["phase"], "requesting_qr")
+
     async def test_fresh_web_start_enters_pairing_and_exposes_claim_command(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory, patch.dict(
             os.environ, {"APP_DATA_DIR": directory}, clear=True

@@ -319,6 +319,12 @@ async def qr_image(request: web.Request) -> web.StreamResponse:
     return web.FileResponse(path, headers={"Cache-Control": "no-store"})
 
 
+async def refresh_qr(request: web.Request) -> web.Response:
+    _, supervisor, _ = _services(request)
+    await supervisor.request_new_qr()
+    return web.json_response({"requested": True})
+
+
 async def provide_2fa(request: web.Request) -> web.Response:
     storage, supervisor, _ = _services(request)
     payload = await request.json()
@@ -453,6 +459,7 @@ def create_web_app(settings: Settings, storage: Storage | None = None) -> web.Ap
     )
     application.router.add_post("/api/max/send", send_max_message)
     application.router.add_get("/api/max/qr", qr_image)
+    application.router.add_post("/api/max/qr/refresh", refresh_qr)
     application.router.add_post("/api/max/2fa", provide_2fa)
     application.router.add_post("/api/max/revoke", revoke_max_session)
     application.router.add_get("/api/stats", stats)

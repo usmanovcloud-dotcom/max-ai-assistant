@@ -1,6 +1,6 @@
 # Установка на Synology одним YAML
 
-Файл `docker-compose.nas.yml` скачивает готовый `linux/amd64` образ из GHCR. Исходники, Dockerfile, `.env` и ручное создание каталогов на NAS не нужны. Данные и секреты сохраняются в именованных Docker volumes.
+Файл `docker-compose.nas.yml` скачивает готовый `linux/amd64` образ из GHCR. Исходники, Dockerfile и `.env` на NAS не нужны. Данные и секреты сохраняются в bind-mounted каталогах `/volume1/docker/max-ai-assistant/data` и `/volume1/docker/max-ai-assistant/secrets`; служебный контейнер `storage-init` создаёт их и назначает владельца `1032:100`.
 
 ## Первичная публикация образа
 
@@ -46,12 +46,12 @@ http://192.168.0.10:8765
 
 ## Обновление и откат
 
-Container Manager → Проект → `max-ai-assistant` → Действие → Сборка/запуск повторно. `pull_policy: always` скачает свежий `latest`, а volumes сохранят состояние.
+Container Manager → Проект → `max-ai-assistant` → Действие → Сборка/запуск повторно. `pull_policy: always` скачает свежий `latest`, а bind-mounted каталоги сохранят состояние.
 
 Для отката используйте версионный тег образа вместо `latest`, например:
 
 ```yaml
-image: ghcr.io/usmanovcloud-dotcom/max-ai-assistant:v0.3.2
+image: ghcr.io/usmanovcloud-dotcom/max-ai-assistant:v0.4.0
 ```
 
-Удаление контейнера не удаляет volumes. Удаляйте `max-ai-assistant-data` и `max-ai-assistant-secrets` только при намеренном полном сбросе.
+Удаление контейнера или проекта не удаляет каталоги `/volume1/docker/max-ai-assistant/data` и `/volume1/docker/max-ai-assistant/secrets`. Удаляйте их только при намеренном полном сбросе. Если установка обновляется с версии на именованных volumes, сначала выполните [`NAS_STORAGE_MIGRATION.md`](NAS_STORAGE_MIGRATION.md).

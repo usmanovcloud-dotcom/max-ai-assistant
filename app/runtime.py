@@ -10,6 +10,7 @@ from app.pymax_transport import PyMaxOptions, PyMaxTransport
 from app.queue import PerChatQueue
 from app.storage import Storage
 from app.storage import DailyLimitExceeded
+from app.transport import IncomingAttachment
 from app.providers.openai_compatible import (
     OpenAIAuthenticationError,
     OpenAICompatibleConfig,
@@ -22,7 +23,11 @@ from app.providers.openai_compatible import (
 )
 
 
-async def echo_responder(text: str, history: list[tuple[str, str]]) -> str:
+async def echo_responder(
+    text: str,
+    history: list[tuple[str, str]],
+    attachments: tuple[IncomingAttachment, ...] = (),
+) -> str:
     return f"echo: {text}"
 
 
@@ -72,16 +77,21 @@ class LLMResponder:
         }.get(self.provider_name, self.provider_name)
         self.logger = logging.getLogger("max_ai_assistant.ai_responder")
 
-    async def __call__(self, text: str, history: list[tuple[str, str]]) -> str:
+    async def __call__(
+        self,
+        text: str,
+        history: list[tuple[str, str]],
+        attachments: tuple[IncomingAttachment, ...] = (),
+    ) -> str:
         command = text.strip().lower()
-        if command == "/new":
+        if not attachments and command == "/new":
             return "Новый разговор начат. Предыдущий контекст больше не используется."
-        if command == "/help":
+        if not attachments and command == "/help":
             return (
-                "Доступны обычный текстовый диалог и команды: /new — новый разговор, "
-                "/status — безопасный статус, /help — эта справка."
+                "Доступны текстовый диалог, документы, изображения и аудио. Команды: "
+                "/new — новый разговор, /status — безопасный статус, /help — эта справка."
             )
-        if command == "/status":
+        if not attachments and command == "/status":
             usage = self.storage.get_daily_usage(self.provider._today())
             return (
                 f"MAX: подключён. AI: {self.provider_label} Responses API. Модель: "
@@ -91,7 +101,11 @@ class LLMResponder:
                 f"{self.provider.config.daily_token_limit} токенов."
             )
         try:
-            return await self.provider.complete(history)
+            unsupported = [item for item in attachments if item.kind == "unsupported"]
+            if unsupported:
+                names = ", ".join(item.filename for item in unsupported[:3])
+                return f"Не могу обработать вложение: {names}. Поддерживаются документы, таблицы, презентации, изображения и аудио."
+            return await self.provider.complete(history, attachments=attachments)
         except DailyLimitExceeded:
             return "Дневной лимит AI исчерпан. Попробуйте после обновления лимита."
         except OpenAIInputTooLong:
@@ -171,6 +185,8 @@ def make_pymax_transport(settings: object) -> PyMaxTransport:
             locale=settings.max_locale,
             timezone=settings.max_timezone,
             header_user_agent=settings.max_web_header_user_agent,
+            max_attachment_count=settings.max_attachment_count,
+            max_attachment_bytes=settings.max_attachment_bytes,
         )
     )
 
@@ -200,6 +216,8 @@ def make_llm_responder(
             safety_identifier=f"max_{safety_hash}",
             instructions=settings.llm_instructions,
             source=source,
+            transcription_model=settings.llm_transcription_model,
+            max_attachment_bytes=settings.max_attachment_bytes,
         ),
         storage,
     )

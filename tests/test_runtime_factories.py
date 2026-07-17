@@ -36,3 +36,7 @@ class RuntimeFactoryTests(unittest.TestCase):
         )
         self.assertEqual(responder.provider.config.provider_name, "openai")
         self.assertEqual(responder.provider.config.model, "gpt-5.6-luna")
+        self.assertEqual(
+            responder.provider.config.transcription_model,
+            "gpt-4o-mini-transcribe",
+        )

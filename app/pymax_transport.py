@@ -7,8 +7,21 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable
+from urllib.parse import urlparse
 
-from app.transport import IncomingMessage
+from app.transport import IncomingAttachment, IncomingMessage
+
+
+SUPPORTED_FILE_EXTENSIONS = {
+    ".c", ".cpp", ".css", ".csv", ".doc", ".docx", ".go", ".html",
+    ".java", ".js", ".json", ".md", ".odt", ".pdf", ".php", ".ppt",
+    ".pptx", ".py", ".rb", ".rs", ".rtf", ".sh", ".sql", ".ts", ".tsv",
+    ".txt", ".xls", ".xlsx", ".xml", ".yaml", ".yml",
+}
+SUPPORTED_AUDIO_EXTENSIONS = {
+    ".aac", ".flac", ".m4a", ".mp3", ".mp4", ".mpeg", ".mpga",
+    ".oga", ".ogg", ".opus", ".wav", ".webm",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +38,8 @@ class PyMaxOptions:
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
     )
+    max_attachment_count: int = 5
+    max_attachment_bytes: int = 20 * 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,10 +122,16 @@ def _build_observable_qr_flow(
     from pymax import QrAuthFlow
 
     class ObservableQrAuthFlow(QrAuthFlow):
+        async def authenticate(self, app: object) -> object:
+            status.write("requesting_qr")
+            result = await super().authenticate(app)
+            status.write("session_starting")
+            return result
+
         async def _poll_qr(self, app: object, qr_info: object) -> bool:
             status.write("waiting_confirmation", expires_at=getattr(qr_info, "expires_at", None))
             confirmed = await super()._poll_qr(app, qr_info)
-            status.write("confirmed" if confirmed else "expired")
+            status.write("qr_confirmed" if confirmed else "expired")
             return confirmed
 
     return ObservableQrAuthFlow(
@@ -259,8 +280,11 @@ class PyMaxTransport:
         if message_id is None or chat_id is None or sender_id is None:
             self.logger.warning("Ignoring MAX event with incomplete identity fields")
             return None
-        if not isinstance(text, str) or not text:
-            self.logger.info("Ignoring non-text MAX message message_id=%s", message_id)
+        attachments = await self._convert_attachments(message, client)
+        if not isinstance(text, str):
+            text = ""
+        if not text and not attachments:
+            self.logger.info("Ignoring empty MAX message message_id=%s", message_id)
             return None
 
         me = getattr(client, "me", None)
@@ -273,7 +297,117 @@ class PyMaxTransport:
             text=text,
             is_outgoing=own_id is not None and int(sender_id) == int(own_id),
             is_direct=await self._is_direct_chat(client, int(chat_id)),
+            attachments=attachments,
         )
+
+    async def _convert_attachments(
+        self, message: Any, client: Any
+    ) -> tuple[IncomingAttachment, ...]:
+        from pymax.types.domain.attachments import (
+            AudioAttachment,
+            FileAttachment,
+            PhotoAttachment,
+        )
+
+        source = tuple(getattr(message, "attaches", ()) or ())
+        result: list[IncomingAttachment] = []
+        for attachment in source[: self.options.max_attachment_count]:
+            if isinstance(attachment, PhotoAttachment):
+                url = self._safe_https_url(attachment.base_url)
+                filename = f"photo-{attachment.photo_id}.jpg"
+                result.append(
+                    IncomingAttachment(
+                        "image" if url else "unsupported",
+                        filename,
+                        url=url,
+                        reason=None if url else "invalid_url",
+                    )
+                )
+                continue
+            if isinstance(attachment, AudioAttachment):
+                url = self._safe_https_url(attachment.url)
+                audio_id = attachment.audio_id or getattr(message, "id", "message")
+                result.append(
+                    IncomingAttachment(
+                        "audio" if url else "unsupported",
+                        f"voice-{audio_id}.ogg",
+                        url=url,
+                        reason=None if url else "invalid_url",
+                    )
+                )
+                continue
+            if isinstance(attachment, FileAttachment):
+                filename = self._safe_filename(attachment.name, attachment.file_id)
+                if attachment.size > self.options.max_attachment_bytes:
+                    result.append(
+                        IncomingAttachment(
+                            "unsupported", filename, size=attachment.size, reason="too_large"
+                        )
+                    )
+                    continue
+                extension = Path(filename).suffix.lower()
+                if extension not in SUPPORTED_FILE_EXTENSIONS | SUPPORTED_AUDIO_EXTENSIONS:
+                    result.append(
+                        IncomingAttachment(
+                            "unsupported", filename, size=attachment.size, reason="file_type"
+                        )
+                    )
+                    continue
+                try:
+                    download = await client.get_file_by_id(
+                        int(message.chat_id), message.id, attachment.file_id
+                    )
+                except Exception as exc:
+                    self.logger.warning(
+                        "Unable to resolve MAX attachment message_id=%s error=%s",
+                        message.id,
+                        type(exc).__name__,
+                    )
+                    download = None
+                url = self._safe_https_url(getattr(download, "url", None))
+                unsafe = bool(getattr(download, "unsafe", False))
+                result.append(
+                    IncomingAttachment(
+                        ("audio" if extension in SUPPORTED_AUDIO_EXTENSIONS else "file")
+                        if url and not unsafe
+                        else "unsupported",
+                        filename,
+                        url=url if not unsafe else None,
+                        size=attachment.size,
+                        reason=None if url and not unsafe else "unavailable",
+                    )
+                )
+                continue
+            result.append(
+                IncomingAttachment(
+                    "unsupported",
+                    type(attachment).__name__.removesuffix("Attachment") or "attachment",
+                    reason="attachment_type",
+                )
+            )
+        if len(source) > self.options.max_attachment_count:
+            result.append(
+                IncomingAttachment(
+                    "unsupported", "additional-attachments", reason="too_many"
+                )
+            )
+        return tuple(result)
+
+    @staticmethod
+    def _safe_filename(name: str, file_id: int) -> str:
+        filename = Path(str(name).replace("\\", "/")).name
+        filename = "".join(char for char in filename if char.isprintable())[:200]
+        return filename or f"file-{file_id}"
+
+    @staticmethod
+    def _safe_https_url(value: object) -> str | None:
+        if not isinstance(value, str):
+            return None
+        candidate = "https:" + value if value.startswith("//") else value
+        parsed = urlparse(candidate)
+        if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password:
+            return None
+        return candidate
 
     async def _run_client(self) -> None:
         error: BaseException | None = None
@@ -306,6 +440,9 @@ class PyMaxTransport:
     async def send_text(self, chat_id: str, text: str) -> None:
         client = self._ensure_client()
         await client.send_message(int(chat_id), text)
+
+    async def send_feedback(self, chat_id: str, text: str) -> None:
+        await self.send_text(chat_id, text)
 
     async def close(self) -> None:
         self._closed = True

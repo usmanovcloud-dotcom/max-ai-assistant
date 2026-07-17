@@ -273,6 +273,10 @@ class AssistantSupervisor:
 
     async def revoke_max_session(self) -> None:
         await self.stop()
+        self._remove_max_session_files()
+        self.storage.add_audit("max_session_revoked")
+
+    def _remove_max_session_files(self) -> None:
         settings = self.settings()
         session_paths = (
             settings.max_session_path,
@@ -283,4 +287,19 @@ class AssistantSupervisor:
         )
         for path in session_paths:
             Path(path).unlink(missing_ok=True)
-        self.storage.add_audit("max_session_revoked")
+
+    async def request_new_qr(self) -> None:
+        await self.stop()
+        self._remove_max_session_files()
+        settings = self.settings()
+        temporary = settings.qr_status_path.with_suffix(".tmp")
+        temporary.write_text(
+            json.dumps(
+                {"phase": "requesting_qr", "updated_at": int(time.time())},
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        temporary.replace(settings.qr_status_path)
+        self.storage.add_audit("max_qr_refresh_requested")
+        await self.start()
